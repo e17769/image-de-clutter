@@ -28,6 +28,7 @@ from pathlib import Path
 
 from ..utils.logger import get_logger
 from ..file_operations.file_scanner import ImageFileScannerThread
+from ..image_processing.duplicate_detector import DuplicateDetectorThread
 
 
 class MainWindow(QMainWindow):
@@ -43,6 +44,9 @@ class MainWindow(QMainWindow):
         self.discovered_files = []
         self.scan_statistics = {}
         self.scanner_thread = None
+        self.duplicate_groups = []
+        self.duplicate_statistics = {}
+        self.duplicate_detector_thread = None
 
         self.init_ui()
 
@@ -138,19 +142,40 @@ class MainWindow(QMainWindow):
         results_group.setLayout(results_layout)
         main_layout.addWidget(results_group)
 
+        # Add duplicate detection results section
+        duplicates_group = QGroupBox("Duplicate Detection Results")
+        duplicates_layout = QVBoxLayout()
+
+        # Duplicates summary
+        self.duplicates_summary = QLabel("No duplicate detection performed yet")
+        duplicates_layout.addWidget(self.duplicates_summary)
+
+        # Duplicates results area
+        self.duplicates_results = QTextEdit()
+        self.duplicates_results.setReadOnly(True)
+        self.duplicates_results.setMaximumHeight(150)
+        self.duplicates_results.setPlainText(
+            "Click 'Detect Duplicates' after scanning images to find duplicates"
+        )
+        duplicates_layout.addWidget(self.duplicates_results)
+
+        duplicates_group.setLayout(duplicates_layout)
+        main_layout.addWidget(duplicates_group)
+
         # Add placeholder content area (reduced)
         content_area = QTextEdit()
         content_area.setPlainText(
             "Welcome to Photo Archivist!\n\n"
             "Steps to use the application:\n"
             "1. Select a folder containing images using 'Choose Folder'\n"
-            "2. Click 'Scan for Duplicates' to discover images\n"
-            "3. Review discovered images in the table below\n\n"
-            "Supported formats: JPG, PNG, GIF, TIFF, WebP, HEIC, BMP, RAW (CR2, NEF, ARW, DNG)\n\n"
+            "2. Click 'Scan for Images' to discover all images in the folder\n"
+            "3. Click 'Detect Duplicates' to find duplicate images\n"
+            "4. Review duplicate groups in the results section\n\n"
+            "Supported formats: JPG, PNG, GIF, TIFF, WebP, HEIC, BMP, RAW (CR2, NEF, ARW, DNG)\n"
+            "Duplicate detection: Uses perceptual hashing (dHash) for accurate detection\n\n"
             "Next features (coming in future stories):\n"
-            "- Duplicate detection and similarity analysis\n"
-            "- Visual comparison interface\n"
-            "- Archive management"
+            "- Visual comparison interface with thumbnails\n"
+            "- Archive management and file operations"
         )
         content_area.setReadOnly(True)
         main_layout.addWidget(content_area)
@@ -158,16 +183,22 @@ class MainWindow(QMainWindow):
         # Add button area
         button_layout = QHBoxLayout()
 
-        # Scan button (now functional for image discovery)
+        # Scan button (for image discovery)
         self.scan_button = QPushButton("Scan for Images")
         self.scan_button.setEnabled(False)  # Will be enabled when folder is selected
         self.scan_button.clicked.connect(self.on_scan_clicked)
         button_layout.addWidget(self.scan_button)
 
-        # Cancel button (for cancelling scans)
-        self.cancel_button = QPushButton("Cancel Scan")
+        # Duplicate detection button
+        self.detect_duplicates_button = QPushButton("Detect Duplicates")
+        self.detect_duplicates_button.setEnabled(False)  # Will be enabled when images are found
+        self.detect_duplicates_button.clicked.connect(self.on_detect_duplicates_clicked)
+        button_layout.addWidget(self.detect_duplicates_button)
+
+        # Cancel button (for cancelling operations)
+        self.cancel_button = QPushButton("Cancel")
         self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.on_cancel_scan)
+        self.cancel_button.clicked.connect(self.on_cancel_operation)
         button_layout.addWidget(self.cancel_button)
 
         settings_button = QPushButton("Settings")
@@ -274,6 +305,7 @@ class MainWindow(QMainWindow):
 
         # Update UI state
         self.scan_button.setEnabled(False)
+        self.detect_duplicates_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.choose_folder_button.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -289,12 +321,16 @@ class MainWindow(QMainWindow):
 
         self.status_bar.showMessage(f"Scanning for images in: {self.selected_folder_path}")
 
-    def on_cancel_scan(self):
-        """Handle cancel scan button click."""
+    def on_cancel_operation(self):
+        """Handle cancel button click for any running operation."""
         if self.scanner_thread and self.scanner_thread.isRunning():
             self.logger.info("User requested scan cancellation")
             self.scanner_thread.cancel_scan()
             self.on_scan_cancelled()
+        elif self.duplicate_detector_thread and self.duplicate_detector_thread.isRunning():
+            self.logger.info("User requested duplicate detection cancellation")
+            self.duplicate_detector_thread.cancel_detection()
+            self.on_duplicate_detection_cancelled()
 
     def on_scan_progress(self, file_count: int, current_file: str):
         """Handle scan progress updates."""
@@ -344,6 +380,10 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.progress_label.setText("Ready to scan")
 
+        # Enable duplicate detection if we have images
+        if self.discovered_files:
+            self.detect_duplicates_button.setEnabled(True)
+
     def populate_results_table(self):
         """Populate the results table with discovered files."""
         self.results_table.setRowCount(len(self.discovered_files))
@@ -390,6 +430,155 @@ class MainWindow(QMainWindow):
 
         summary = f"Found {total_files} images ({size_str}) - Types: {extensions_str}"
         self.results_summary.setText(summary)
+
+    def on_detect_duplicates_clicked(self):
+        """Handle detect duplicates button click."""
+        if not self.discovered_files:
+            self.logger.warning("Duplicate detection clicked but no images available")
+            self.status_bar.showMessage("Please scan for images first")
+            return
+
+        self.logger.info(f"Starting duplicate detection for {len(self.discovered_files)} images")
+
+        # Clear previous duplicate results
+        self.duplicate_groups = []
+        self.duplicate_statistics = {}
+        self.duplicates_results.clear()
+        self.duplicates_summary.setText("Detecting duplicates...")
+
+        # Update UI state
+        self.detect_duplicates_button.setEnabled(False)
+        self.scan_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.choose_folder_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)  # Determinate progress for duplicate detection
+        self.progress_label.setText("Analyzing images for duplicates...")
+
+        # Extract image paths from discovered files
+        image_paths = [file_info["path"] for file_info in self.discovered_files]
+
+        # Start duplicate detection thread
+        self.duplicate_detector_thread = DuplicateDetectorThread(
+            image_paths, algorithm="dhash", threshold=5
+        )
+        self.duplicate_detector_thread.progress_update.connect(self.on_duplicate_detection_progress)
+        self.duplicate_detector_thread.detection_completed.connect(
+            self.on_duplicate_detection_completed
+        )
+        self.duplicate_detector_thread.detection_error.connect(self.on_duplicate_detection_error)
+        self.duplicate_detector_thread.start()
+
+        self.status_bar.showMessage("Detecting duplicate images...")
+
+    def on_duplicate_detection_progress(self, progress_percent: int, status_message: str):
+        """Handle duplicate detection progress updates."""
+        self.progress_bar.setValue(progress_percent)
+        self.progress_label.setText(status_message)
+        self.status_bar.showMessage(f"Duplicate detection: {progress_percent}% - {status_message}")
+
+    def on_duplicate_detection_completed(self, duplicate_groups: list, statistics: dict):
+        """Handle duplicate detection completion."""
+        self.logger.info(f"Duplicate detection completed: {len(duplicate_groups)} groups found")
+
+        # Store results
+        self.duplicate_groups = duplicate_groups
+        self.duplicate_statistics = statistics
+
+        # Update UI
+        self.populate_duplicate_results()
+        self.update_duplicate_summary()
+        self.reset_duplicate_detection_ui()
+
+        # Update status
+        total_groups = statistics.get("total_groups_found", 0)
+        total_duplicates = statistics.get("total_duplicate_images", 0)
+        detection_time = statistics.get("detection_time", 0)
+
+        message = (
+            f"Duplicate detection completed: {total_groups} groups, "
+            f"{total_duplicates} duplicates in {detection_time:.1f}s"
+        )
+        self.status_bar.showMessage(message)
+
+    def on_duplicate_detection_error(self, error_message: str):
+        """Handle duplicate detection error."""
+        self.logger.error(f"Duplicate detection error: {error_message}")
+        self.show_error_message(
+            "Duplicate Detection Error",
+            f"An error occurred during duplicate detection:\n{error_message}",
+        )
+        self.reset_duplicate_detection_ui()
+        self.status_bar.showMessage("Duplicate detection failed")
+
+    def on_duplicate_detection_cancelled(self):
+        """Handle duplicate detection cancellation."""
+        self.logger.info("Duplicate detection was cancelled")
+        self.reset_duplicate_detection_ui()
+        self.status_bar.showMessage("Duplicate detection cancelled")
+
+    def reset_duplicate_detection_ui(self):
+        """Reset UI state after duplicate detection completion/cancellation."""
+        self.detect_duplicates_button.setEnabled(True)
+        self.scan_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.choose_folder_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setText("Ready to scan")
+
+    def populate_duplicate_results(self):
+        """Populate the duplicate results display."""
+        if not self.duplicate_groups:
+            self.duplicates_results.setPlainText("No duplicate groups found.")
+            return
+
+        results_text = []
+        for i, group in enumerate(self.duplicate_groups):
+            group_dict = group.to_dict()
+            results_text.append(f"=== Duplicate Group {i + 1} ===")
+            results_text.append(f"Images: {group_dict['image_count']}")
+            results_text.append(f"Total Size: {self.format_file_size(group_dict['total_size'])}")
+            results_text.append(f"Algorithm: {group_dict['algorithm']}")
+            results_text.append("Files:")
+
+            for j, image in enumerate(group_dict["images"]):
+                filename = Path(image["path"]).name
+                size_str = self.format_file_size(image.get("file_size", 0))
+                results_text.append(f"  {j + 1}. {filename} ({size_str})")
+                results_text.append(f"     Path: {image['path']}")
+
+            results_text.append("")  # Empty line between groups
+
+        self.duplicates_results.setPlainText("\n".join(results_text))
+
+    def update_duplicate_summary(self):
+        """Update the duplicate detection summary."""
+        if not self.duplicate_statistics:
+            return
+
+        total_groups = self.duplicate_statistics.get("total_groups_found", 0)
+        total_duplicates = self.duplicate_statistics.get("total_duplicate_images", 0)
+        total_processed = self.duplicate_statistics.get("total_images_processed", 0)
+        algorithm = self.duplicate_statistics.get("algorithm_used", "unknown")
+
+        if total_groups == 0:
+            summary = f"No duplicates found among {total_processed} images (using {algorithm})"
+        else:
+            summary = (
+                f"Found {total_groups} duplicate groups with {total_duplicates} images "
+                f"(using {algorithm})"
+            )
+
+        self.duplicates_summary.setText(summary)
+
+    def format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human readable format."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        else:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
 
     def on_settings_clicked(self):
         """Handle settings button click (placeholder)."""

@@ -1,5 +1,54 @@
 # The Photo Archivist Product Requirements Document (PRD)
 
+## Target Audience & User Personas
+
+### Primary Target: Sarah - The Family Archivist (40% of market)
+**Demographics**: 35-50, marketing/teaching professional, moderate tech savvy  
+**Photo Volume**: 15,000-30,000 accumulated family photos  
+**Key Needs**: Simple, safe duplicate removal; clear visual comparison; smart pre-selection  
+**Pain Points**: Storage full, duplicate confusion, time constraints, fear of deletion
+
+### Secondary Target: Marcus - The Professional Photographer (25% of market)
+**Demographics**: 28-45, wedding/portrait photographer, high tech savvy  
+**Photo Volume**: 100,000+ photos, adding 5,000+ monthly  
+**Key Needs**: RAW format support, speed, metadata preservation, batch operations  
+**Pain Points**: Storage costs, backup time, workflow interruption, RAW file handling
+
+### Tertiary Target: David - The Tech Enthusiast (20% of market)
+**Demographics**: 22-35, software developer/IT professional, expert level  
+**Photo Volume**: 25,000-50,000 mixed content photos  
+**Key Needs**: Open source transparency, extensibility, privacy, advanced configuration  
+**Pain Points**: Vendor lock-in, limited customization, privacy concerns
+
+### Institutional Target: Linda - The Digital Librarian (15% of market)
+**Demographics**: 45-60, librarian/archivist/curator, moderate-high tech savvy  
+**Photo Volume**: 50,000-200,000+ institutional images  
+**Key Needs**: Accuracy, audit trail, metadata preservation, cost effectiveness  
+**Pain Points**: Budget constraints, accuracy requirements, compliance needs
+
+*See [User Personas Document](user-personas.md) for detailed analysis*
+
+## Market Position & Competitive Landscape
+
+### Market Opportunity
+**Market Size**: 2M+ macOS users seeking duplicate photo solutions  
+**Price Range**: $9.99-$39.99 for premium solutions  
+**Key Trend**: AI-powered similarity detection replacing basic hash matching
+
+### Primary Competitors
+1. **PhotoSweeper Pro** ($9.99) - Market leader with advanced similarity engine
+2. **Duplicate Photos Fixer Pro** ($19.99) - Professional focus with metadata comparison  
+3. **Gemini 2** ($19.99) - General purpose duplicate finder
+4. **Built-in macOS Solutions** (Free) - Basic functionality in Photos app
+
+### Competitive Differentiation
+- **Open Source Transparency**: Full source code availability vs closed competitors
+- **Advanced AI with Explainability**: State-of-the-art imagededup library with clear scoring
+- **Professional Archive Management**: Sophisticated organization vs basic folder approach
+- **Privacy-First Approach**: Local-only processing with no cloud dependencies
+
+*See [Competitive Analysis Document](competitive-analysis.md) for detailed market analysis*
+
 ## Goals and Background Context
 
 ### Goals
@@ -16,13 +65,14 @@ Many users accumulate thousands of photos across various folders, often containi
 | Date | Version | Description | Author |
 |------|---------|-------------|---------|
 | 2024-12-20 | 1.0 | Initial PRD creation | Product Owner |
+| 2024-12-20 | 1.1 | Added user personas and competitive analysis | Business Analyst |
 
 ## Requirements
 
 ### Functional Requirements
 
 1. **FR1**: The application shall provide a folder selection interface allowing users to choose a single root directory for scanning
-2. **FR2**: The application shall recursively traverse the selected directory and all subdirectories to identify image files in common formats (.jpg, .jpeg, .png, .gif)
+2. **FR2**: The application shall recursively traverse the selected directory and all subdirectories to identify image files in formats including: common formats (.jpg, .jpeg, .png, .gif, .tiff, .webp, .heic, .bmp) and professional RAW formats (.cr2, .nef, .arw, .dng)
 3. **FR3**: The application shall use the imagededup library to detect both exact duplicates (using PHash/DHash) and visually similar images using CNN analysis
 4. **FR4**: The application shall provide a configurable similarity threshold via slider control ranging from "Strict" to "Loose" matching
 5. **FR5**: The application shall display a progress bar during the scanning operation with meaningful status updates
@@ -36,6 +86,11 @@ Many users accumulate thousands of photos across various folders, often containi
 13. **FR13**: The application shall place all archived images directly in the Archived folder without replicating original directory structure
 14. **FR14**: The application shall display confirmation messages upon successful completion of archival operations
 15. **FR15**: The application shall handle file access errors and missing files gracefully with user-friendly error messages
+16. **FR16**: The application shall provide keyboard shortcuts for power users (select all, deselect all, archive selected, cancel operation)
+17. **FR17**: The application shall implement undo/redo functionality for selection operations to prevent accidental mistakes
+18. **FR18**: The application shall support session save/restore functionality allowing users to pause and resume large library processing
+19. **FR19**: The application shall provide side-by-side image comparison view with zoom capability for detailed duplicate analysis
+20. **FR20**: The application shall display and compare image metadata (EXIF data, file dates, quality metrics) to assist in selection decisions
 
 ### Non-Functional Requirements
 
@@ -46,6 +101,10 @@ Many users accumulate thousands of photos across various folders, often containi
 5. **NFR5**: The similarity detection accuracy shall be configurable to balance speed vs. precision
 6. **NFR6**: The user interface shall remain responsive during scanning operations through proper threading
 7. **NFR7**: The application shall preserve file metadata and timestamps during move operations
+8. **NFR8**: The application shall process collections of up to 50,000 images efficiently (target: 500+ images/minute for hash-based detection)
+9. **NFR9**: The application shall implement local-only processing with no cloud dependencies to ensure user privacy
+10. **NFR10**: The application shall maintain complete audit trail logging for all file operations for institutional compliance
+11. **NFR11**: The application shall support incremental scanning to only process new/changed files in subsequent scans
 
 ## User Interface Design Goals
 

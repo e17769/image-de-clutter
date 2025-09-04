@@ -190,10 +190,16 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.scan_button)
 
         # Duplicate detection button
-        self.detect_duplicates_button = QPushButton("Detect Duplicates")
+        self.detect_duplicates_button = QPushButton("Detect Duplicates (Hash)")
         self.detect_duplicates_button.setEnabled(False)  # Will be enabled when images are found
         self.detect_duplicates_button.clicked.connect(self.on_detect_duplicates_clicked)
         button_layout.addWidget(self.detect_duplicates_button)
+
+        # Advanced similarity detection button
+        self.detect_similar_button = QPushButton("Find Similar Images (CNN)")
+        self.detect_similar_button.setEnabled(False)  # Will be enabled when images are found
+        self.detect_similar_button.clicked.connect(self.on_detect_similar_clicked)
+        button_layout.addWidget(self.detect_similar_button)
 
         # Cancel button (for cancelling operations)
         self.cancel_button = QPushButton("Cancel")
@@ -383,6 +389,7 @@ class MainWindow(QMainWindow):
         # Enable duplicate detection if we have images
         if self.discovered_files:
             self.detect_duplicates_button.setEnabled(True)
+            self.detect_similar_button.setEnabled(True)
 
     def populate_results_table(self):
         """Populate the results table with discovered files."""
@@ -448,6 +455,7 @@ class MainWindow(QMainWindow):
 
         # Update UI state
         self.detect_duplicates_button.setEnabled(False)
+        self.detect_similar_button.setEnabled(False)
         self.scan_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.choose_folder_button.setEnabled(False)
@@ -470,6 +478,49 @@ class MainWindow(QMainWindow):
         self.duplicate_detector_thread.start()
 
         self.status_bar.showMessage("Detecting duplicate images...")
+
+    def on_detect_similar_clicked(self):
+        """Handle detect similar images button click (CNN-based)."""
+        if not self.discovered_files:
+            self.logger.warning("Similar detection clicked but no images available")
+            self.status_bar.showMessage("Please scan for images first")
+            return
+
+        self.logger.info(
+            f"Starting CNN-based similarity detection for {len(self.discovered_files)} images"
+        )
+
+        # Clear previous duplicate results
+        self.duplicate_groups = []
+        self.duplicate_statistics = {}
+        self.duplicates_results.clear()
+        self.duplicates_summary.setText("Finding similar images...")
+
+        # Update UI state
+        self.detect_duplicates_button.setEnabled(False)
+        self.detect_similar_button.setEnabled(False)
+        self.scan_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.choose_folder_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_label.setText("Analyzing images with CNN...")
+
+        # Extract image paths from discovered files
+        image_paths = [file_info["path"] for file_info in self.discovered_files]
+
+        # Start CNN-based duplicate detection thread
+        self.duplicate_detector_thread = DuplicateDetectorThread(
+            image_paths, algorithm="dhash", threshold=5, use_cnn=True, cnn_threshold=0.85
+        )
+        self.duplicate_detector_thread.progress_update.connect(self.on_duplicate_detection_progress)
+        self.duplicate_detector_thread.detection_completed.connect(
+            self.on_duplicate_detection_completed
+        )
+        self.duplicate_detector_thread.detection_error.connect(self.on_duplicate_detection_error)
+        self.duplicate_detector_thread.start()
+
+        self.status_bar.showMessage("Finding similar images with CNN analysis...")
 
     def on_duplicate_detection_progress(self, progress_percent: int, status_message: str):
         """Handle duplicate detection progress updates."""
@@ -520,6 +571,7 @@ class MainWindow(QMainWindow):
     def reset_duplicate_detection_ui(self):
         """Reset UI state after duplicate detection completion/cancellation."""
         self.detect_duplicates_button.setEnabled(True)
+        self.detect_similar_button.setEnabled(True)
         self.scan_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         self.choose_folder_button.setEnabled(True)
@@ -535,10 +587,25 @@ class MainWindow(QMainWindow):
         results_text = []
         for i, group in enumerate(self.duplicate_groups):
             group_dict = group.to_dict()
-            results_text.append(f"=== Duplicate Group {i + 1} ===")
+            algorithm_name = {
+                "dhash": "Hash-based (dHash)",
+                "ahash": "Hash-based (aHash)",
+                "cnn": "CNN-based Similarity",
+            }.get(group_dict["algorithm"], group_dict["algorithm"])
+
+            results_text.append(f"=== {algorithm_name} Group {i + 1} ===")
             results_text.append(f"Images: {group_dict['image_count']}")
             results_text.append(f"Total Size: {self.format_file_size(group_dict['total_size'])}")
-            results_text.append(f"Algorithm: {group_dict['algorithm']}")
+            results_text.append(f"Detection Method: {algorithm_name}")
+
+            # Show similarity score and confidence for CNN groups
+            if "similarity_score" in group_dict and group_dict["algorithm"] == "cnn":
+                similarity_pct = group_dict["similarity_score"] * 100
+                confidence = group_dict.get("confidence_level", "unknown")
+                results_text.append(
+                    f"Similarity Score: {similarity_pct:.1f}% (Confidence: {confidence})"
+                )
+
             results_text.append("Files:")
 
             for j, image in enumerate(group_dict["images"]):
@@ -546,6 +613,11 @@ class MainWindow(QMainWindow):
                 size_str = self.format_file_size(image.get("file_size", 0))
                 results_text.append(f"  {j + 1}. {filename} ({size_str})")
                 results_text.append(f"     Path: {image['path']}")
+
+                # Show individual similarity score for CNN groups
+                if "similarity_to_group" in image and group_dict["algorithm"] == "cnn":
+                    individual_similarity = image["similarity_to_group"] * 100
+                    results_text.append(f"     Similarity: {individual_similarity:.1f}%")
 
             results_text.append("")  # Empty line between groups
 
@@ -559,14 +631,30 @@ class MainWindow(QMainWindow):
         total_groups = self.duplicate_statistics.get("total_groups_found", 0)
         total_duplicates = self.duplicate_statistics.get("total_duplicate_images", 0)
         total_processed = self.duplicate_statistics.get("total_images_processed", 0)
-        algorithm = self.duplicate_statistics.get("algorithm_used", "unknown")
+        hash_groups = self.duplicate_statistics.get("hash_groups_found", 0)
+        cnn_groups = self.duplicate_statistics.get("cnn_groups_found", 0)
+        cnn_enabled = self.duplicate_statistics.get("cnn_enabled", False)
 
         if total_groups == 0:
-            summary = f"No duplicates found among {total_processed} images (using {algorithm})"
+            if cnn_enabled:
+                summary = (
+                    f"No duplicates found among {total_processed} images "
+                    f"(using hash + CNN analysis)"
+                )
+            else:
+                algorithm = self.duplicate_statistics.get("algorithm_used", "hash")
+                summary = f"No duplicates found among {total_processed} images (using {algorithm})"
         else:
+            parts = []
+            if hash_groups > 0:
+                parts.append(f"{hash_groups} hash-based")
+            if cnn_groups > 0:
+                parts.append(f"{cnn_groups} CNN-based")
+
+            methods_str = " + ".join(parts) if parts else "mixed"
             summary = (
                 f"Found {total_groups} duplicate groups with {total_duplicates} images "
-                f"(using {algorithm})"
+                f"({methods_str} detection)"
             )
 
         self.duplicates_summary.setText(summary)

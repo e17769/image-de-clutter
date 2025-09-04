@@ -42,6 +42,7 @@ class TestMainWindow:
             button_texts = [btn.text() for btn in buttons]
             assert "Scan for Duplicates" in button_texts
             assert "Settings" in button_texts
+            assert "Choose Folder" in button_texts
     
     def test_scan_button_click_handler(self, qapp):
         """Test scan button click handler."""
@@ -52,11 +53,11 @@ class TestMainWindow:
             window = MainWindow()
             window.on_scan_clicked()
             
-            # Verify logger was called
-            mock_logger_instance.info.assert_called_with("Scan button clicked (not implemented yet)")
+            # Verify logger was called (scan with no folder selected)
+            mock_logger_instance.warning.assert_called_with("Scan button clicked but no folder selected")
             
             # Verify status bar message
-            assert "Story 1.4" in window.status_bar.currentMessage()
+            assert "Please select a folder first" in window.status_bar.currentMessage()
     
     def test_settings_button_click_handler(self, qapp):
         """Test settings button click handler."""

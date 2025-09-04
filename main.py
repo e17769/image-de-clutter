@@ -37,8 +37,7 @@ def main():
     app.setOrganizationName("Photo Archivist Team")
     
     # Enable high DPI support for macOS Retina displays
-    app.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
-    app.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, True)
+    # Note: AA_EnableHighDpiScaling is deprecated in Qt 6, high DPI is enabled by default
     
     try:
         # Create and show main window

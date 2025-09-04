@@ -40,7 +40,8 @@ class TestMainWindow:
             # Check for buttons
             buttons = window.findChildren(QPushButton)
             button_texts = [btn.text() for btn in buttons]
-            assert "Scan for Duplicates" in button_texts
+            assert "Scan for Images" in button_texts
+            assert "Cancel Scan" in button_texts
             assert "Settings" in button_texts
             assert "Choose Folder" in button_texts
     

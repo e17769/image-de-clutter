@@ -154,7 +154,7 @@ class TestFolderSelection:
             # Test scan button click with folder selected
             window.on_scan_clicked()
             mock_logger_instance.info.assert_called_with(
-                f"Scan button clicked for folder: {str(tmp_path)}"
+                f"Starting image discovery scan for: {str(tmp_path)}"
             )
 
     def test_error_message_dialog_creation(self, qapp):

@@ -17,11 +17,17 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QGroupBox,
+    QProgressBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
+from pathlib import Path
 
 from ..utils.logger import get_logger
+from ..file_operations.file_scanner import ImageFileScannerThread
 
 
 class MainWindow(QMainWindow):
@@ -34,6 +40,9 @@ class MainWindow(QMainWindow):
 
         # Initialize state
         self.selected_folder_path = None
+        self.discovered_files = []
+        self.scan_statistics = {}
+        self.scanner_thread = None
 
         self.init_ui()
 
@@ -85,17 +94,63 @@ class MainWindow(QMainWindow):
         folder_group.setLayout(folder_layout)
         main_layout.addWidget(folder_group)
 
-        # Add placeholder content area
+        # Add scan progress section
+        progress_group = QGroupBox("Scan Progress")
+        progress_layout = QVBoxLayout()
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        progress_layout.addWidget(self.progress_bar)
+
+        # Progress label
+        self.progress_label = QLabel("Ready to scan")
+        progress_layout.addWidget(self.progress_label)
+
+        progress_group.setLayout(progress_layout)
+        main_layout.addWidget(progress_group)
+
+        # Add results section
+        results_group = QGroupBox("Discovered Images")
+        results_layout = QVBoxLayout()
+
+        # Results summary
+        self.results_summary = QLabel("No images discovered yet")
+        results_layout.addWidget(self.results_summary)
+
+        # Results table
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(4)
+        self.results_table.setHorizontalHeaderLabels(["Filename", "Path", "Size", "Type"])
+
+        # Configure table
+        header = self.results_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setMaximumHeight(200)  # Limit height for now
+
+        results_layout.addWidget(self.results_table)
+        results_group.setLayout(results_layout)
+        main_layout.addWidget(results_group)
+
+        # Add placeholder content area (reduced)
         content_area = QTextEdit()
         content_area.setPlainText(
             "Welcome to Photo Archivist!\n\n"
-            "This is the initial version of the application.\n"
-            "Features will be added in subsequent development iterations:\n\n"
-            "- Folder selection for image scanning\n"
-            "- Duplicate image detection\n"
+            "Steps to use the application:\n"
+            "1. Select a folder containing images using 'Choose Folder'\n"
+            "2. Click 'Scan for Duplicates' to discover images\n"
+            "3. Review discovered images in the table below\n\n"
+            "Supported formats: JPG, PNG, GIF, TIFF, WebP, HEIC, BMP, RAW (CR2, NEF, ARW, DNG)\n\n"
+            "Next features (coming in future stories):\n"
+            "- Duplicate detection and similarity analysis\n"
             "- Visual comparison interface\n"
-            "- Archive management\n\n"
-            "Application initialized successfully."
+            "- Archive management"
         )
         content_area.setReadOnly(True)
         main_layout.addWidget(content_area)
@@ -103,11 +158,17 @@ class MainWindow(QMainWindow):
         # Add button area
         button_layout = QHBoxLayout()
 
-        # Placeholder buttons for future functionality
-        self.scan_button = QPushButton("Scan for Duplicates")
+        # Scan button (now functional for image discovery)
+        self.scan_button = QPushButton("Scan for Images")
         self.scan_button.setEnabled(False)  # Will be enabled when folder is selected
         self.scan_button.clicked.connect(self.on_scan_clicked)
         button_layout.addWidget(self.scan_button)
+
+        # Cancel button (for cancelling scans)
+        self.cancel_button = QPushButton("Cancel Scan")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.on_cancel_scan)
+        button_layout.addWidget(self.cancel_button)
 
         settings_button = QPushButton("Settings")
         settings_button.setEnabled(False)  # Will be enabled in future stories
@@ -197,14 +258,138 @@ class MainWindow(QMainWindow):
         msg_box.exec()
 
     def on_scan_clicked(self):
-        """Handle scan button click (placeholder)."""
-        if self.selected_folder_path:
-            self.logger.info(f"Scan button clicked for folder: {self.selected_folder_path}")
-            message = f"Scan will be implemented in Story 1.4 for: {self.selected_folder_path}"
-            self.status_bar.showMessage(message)
-        else:
+        """Handle scan button click - start image discovery."""
+        if not self.selected_folder_path:
             self.logger.warning("Scan button clicked but no folder selected")
             self.status_bar.showMessage("Please select a folder first")
+            return
+
+        self.logger.info(f"Starting image discovery scan for: {self.selected_folder_path}")
+
+        # Clear previous results
+        self.discovered_files = []
+        self.scan_statistics = {}
+        self.results_table.setRowCount(0)
+        self.results_summary.setText("Scanning in progress...")
+
+        # Update UI state
+        self.scan_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.choose_folder_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)  # Indeterminate progress
+        self.progress_label.setText("Discovering images...")
+
+        # Start scanner thread
+        self.scanner_thread = ImageFileScannerThread(self.selected_folder_path)
+        self.scanner_thread.progress_update.connect(self.on_scan_progress)
+        self.scanner_thread.scan_completed.connect(self.on_scan_completed)
+        self.scanner_thread.scan_error.connect(self.on_scan_error)
+        self.scanner_thread.start()
+
+        self.status_bar.showMessage(f"Scanning for images in: {self.selected_folder_path}")
+
+    def on_cancel_scan(self):
+        """Handle cancel scan button click."""
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            self.logger.info("User requested scan cancellation")
+            self.scanner_thread.cancel_scan()
+            self.on_scan_cancelled()
+
+    def on_scan_progress(self, file_count: int, current_file: str):
+        """Handle scan progress updates."""
+        self.progress_label.setText(f"Found {file_count} images... {current_file}")
+        self.status_bar.showMessage(f"Discovered {file_count} images so far...")
+
+    def on_scan_completed(self, discovered_files: list, statistics: dict):
+        """Handle scan completion."""
+        self.logger.info(f"Scan completed: {len(discovered_files)} images discovered")
+
+        # Store results
+        self.discovered_files = discovered_files
+        self.scan_statistics = statistics
+
+        # Update UI
+        self.populate_results_table()
+        self.update_results_summary()
+        self.reset_scan_ui()
+
+        # Update status
+        total_files = statistics.get("total_files", 0)
+        scan_time = statistics.get("scan_time", 0)
+        self.status_bar.showMessage(
+            f"Scan completed: {total_files} images found in {scan_time:.1f}s"
+        )
+
+    def on_scan_error(self, error_message: str):
+        """Handle scan error."""
+        self.logger.error(f"Scan error: {error_message}")
+        self.show_error_message(
+            "Scan Error", f"An error occurred during scanning:\n{error_message}"
+        )
+        self.reset_scan_ui()
+        self.status_bar.showMessage("Scan failed")
+
+    def on_scan_cancelled(self):
+        """Handle scan cancellation."""
+        self.logger.info("Scan was cancelled")
+        self.reset_scan_ui()
+        self.status_bar.showMessage("Scan cancelled")
+
+    def reset_scan_ui(self):
+        """Reset UI state after scan completion/cancellation."""
+        self.scan_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+        self.choose_folder_button.setEnabled(True)
+        self.progress_bar.setVisible(False)
+        self.progress_label.setText("Ready to scan")
+
+    def populate_results_table(self):
+        """Populate the results table with discovered files."""
+        self.results_table.setRowCount(len(self.discovered_files))
+
+        for row, file_info in enumerate(self.discovered_files):
+            # Extract filename from path
+            filename = Path(file_info["path"]).name
+
+            # Format file size
+            size_bytes = file_info["size"]
+            if size_bytes < 1024:
+                size_str = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+            # Set table items
+            self.results_table.setItem(row, 0, QTableWidgetItem(filename))
+            self.results_table.setItem(row, 1, QTableWidgetItem(file_info["path"]))
+            self.results_table.setItem(row, 2, QTableWidgetItem(size_str))
+            self.results_table.setItem(row, 3, QTableWidgetItem(file_info["extension"].upper()))
+
+    def update_results_summary(self):
+        """Update the results summary label."""
+        if not self.scan_statistics:
+            return
+
+        total_files = self.scan_statistics.get("total_files", 0)
+        total_size = self.scan_statistics.get("total_size", 0)
+        extensions = self.scan_statistics.get("extensions_found", [])
+
+        # Format total size
+        if total_size < 1024 * 1024:
+            size_str = f"{total_size / 1024:.1f} KB"
+        elif total_size < 1024 * 1024 * 1024:
+            size_str = f"{total_size / (1024 * 1024):.1f} MB"
+        else:
+            size_str = f"{total_size / (1024 * 1024 * 1024):.1f} GB"
+
+        extensions_str = ", ".join(ext.upper() for ext in extensions[:5])  # Show first 5
+        if len(extensions) > 5:
+            extensions_str += f" and {len(extensions) - 5} more"
+
+        summary = f"Found {total_files} images ({size_str}) - Types: {extensions_str}"
+        self.results_summary.setText(summary)
 
     def on_settings_clicked(self):
         """Handle settings button click (placeholder)."""

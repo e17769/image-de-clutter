@@ -29,6 +29,8 @@ from pathlib import Path
 from ..utils.logger import get_logger
 from ..file_operations.file_scanner import ImageFileScannerThread
 from ..image_processing.duplicate_detector import DuplicateDetectorThread
+from .thumbnail_manager import ThumbnailManager
+from .duplicate_group_widget import DuplicateGroupsDisplayWidget
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +49,9 @@ class MainWindow(QMainWindow):
         self.duplicate_groups = []
         self.duplicate_statistics = {}
         self.duplicate_detector_thread = None
+        
+        # Initialize thumbnail manager
+        self.thumbnail_manager = ThumbnailManager(max_cache_size=500)
 
         self.init_ui()
 
@@ -142,25 +147,9 @@ class MainWindow(QMainWindow):
         results_group.setLayout(results_layout)
         main_layout.addWidget(results_group)
 
-        # Add duplicate detection results section
-        duplicates_group = QGroupBox("Duplicate Detection Results")
-        duplicates_layout = QVBoxLayout()
-
-        # Duplicates summary
-        self.duplicates_summary = QLabel("No duplicate detection performed yet")
-        duplicates_layout.addWidget(self.duplicates_summary)
-
-        # Duplicates results area
-        self.duplicates_results = QTextEdit()
-        self.duplicates_results.setReadOnly(True)
-        self.duplicates_results.setMaximumHeight(150)
-        self.duplicates_results.setPlainText(
-            "Click 'Detect Duplicates' after scanning images to find duplicates"
-        )
-        duplicates_layout.addWidget(self.duplicates_results)
-
-        duplicates_group.setLayout(duplicates_layout)
-        main_layout.addWidget(duplicates_group)
+        # Add duplicate detection results section with thumbnails
+        self.duplicate_groups_display = DuplicateGroupsDisplayWidget(self.thumbnail_manager)
+        main_layout.addWidget(self.duplicate_groups_display)
 
         # Add placeholder content area (reduced)
         content_area = QTextEdit()
@@ -450,8 +439,7 @@ class MainWindow(QMainWindow):
         # Clear previous duplicate results
         self.duplicate_groups = []
         self.duplicate_statistics = {}
-        self.duplicates_results.clear()
-        self.duplicates_summary.setText("Detecting duplicates...")
+        self.duplicate_groups_display.clear_groups()
 
         # Update UI state
         self.detect_duplicates_button.setEnabled(False)
@@ -493,8 +481,7 @@ class MainWindow(QMainWindow):
         # Clear previous duplicate results
         self.duplicate_groups = []
         self.duplicate_statistics = {}
-        self.duplicates_results.clear()
-        self.duplicates_summary.setText("Finding similar images...")
+        self.duplicate_groups_display.clear_groups()
 
         # Update UI state
         self.detect_duplicates_button.setEnabled(False)
@@ -536,9 +523,8 @@ class MainWindow(QMainWindow):
         self.duplicate_groups = duplicate_groups
         self.duplicate_statistics = statistics
 
-        # Update UI
+        # Update UI with thumbnail display
         self.populate_duplicate_results()
-        self.update_duplicate_summary()
         self.reset_duplicate_detection_ui()
 
         # Update status
@@ -579,49 +565,14 @@ class MainWindow(QMainWindow):
         self.progress_label.setText("Ready to scan")
 
     def populate_duplicate_results(self):
-        """Populate the duplicate results display."""
-        if not self.duplicate_groups:
-            self.duplicates_results.setPlainText("No duplicate groups found.")
-            return
-
-        results_text = []
-        for i, group in enumerate(self.duplicate_groups):
-            group_dict = group.to_dict()
-            algorithm_name = {
-                "dhash": "Hash-based (dHash)",
-                "ahash": "Hash-based (aHash)",
-                "cnn": "CNN-based Similarity",
-            }.get(group_dict["algorithm"], group_dict["algorithm"])
-
-            results_text.append(f"=== {algorithm_name} Group {i + 1} ===")
-            results_text.append(f"Images: {group_dict['image_count']}")
-            results_text.append(f"Total Size: {self.format_file_size(group_dict['total_size'])}")
-            results_text.append(f"Detection Method: {algorithm_name}")
-
-            # Show similarity score and confidence for CNN groups
-            if "similarity_score" in group_dict and group_dict["algorithm"] == "cnn":
-                similarity_pct = group_dict["similarity_score"] * 100
-                confidence = group_dict.get("confidence_level", "unknown")
-                results_text.append(
-                    f"Similarity Score: {similarity_pct:.1f}% (Confidence: {confidence})"
-                )
-
-            results_text.append("Files:")
-
-            for j, image in enumerate(group_dict["images"]):
-                filename = Path(image["path"]).name
-                size_str = self.format_file_size(image.get("file_size", 0))
-                results_text.append(f"  {j + 1}. {filename} ({size_str})")
-                results_text.append(f"     Path: {image['path']}")
-
-                # Show individual similarity score for CNN groups
-                if "similarity_to_group" in image and group_dict["algorithm"] == "cnn":
-                    individual_similarity = image["similarity_to_group"] * 100
-                    results_text.append(f"     Similarity: {individual_similarity:.1f}%")
-
-            results_text.append("")  # Empty line between groups
-
-        self.duplicates_results.setPlainText("\n".join(results_text))
+        """Populate the duplicate results display with thumbnails."""
+        # Convert duplicate groups to the format expected by the display widget
+        group_dicts = []
+        for group in self.duplicate_groups:
+            group_dicts.append(group.to_dict())
+        
+        # Display groups in the thumbnail widget
+        self.duplicate_groups_display.display_duplicate_groups(group_dicts)
 
     def update_duplicate_summary(self):
         """Update the duplicate detection summary."""
@@ -676,4 +627,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle application close event."""
         self.logger.info("Application closing")
+        
+        # Shutdown thumbnail manager
+        if hasattr(self, 'thumbnail_manager'):
+            self.thumbnail_manager.shutdown()
+        
         event.accept()
